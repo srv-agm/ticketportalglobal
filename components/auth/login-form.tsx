@@ -70,39 +70,37 @@ export function LoginForm() {
     try {
       if (!email || !password) {
         setError("Email and password are required")
+        setIsLoading(false)
         return
       }
 
-      const response = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+      // Use NextAuth's signIn function with credentials provider
+      const result = await signIn("credentials", {
+        email,
+        password,
+        redirect: false, // We handle redirect manually
       })
 
-      const data = await response.json()
-
-      if (!response.ok) {
-        const errorMsg = data.error || data.details || "Invalid email or password"
+      if (!result || !result.ok) {
+        const errorMsg = result?.error || "Invalid email or password"
         console.error("[LoginForm] Login failed:", errorMsg)
         setError(errorMsg)
+        setIsLoading(false)
         return
       }
 
-      localStorage.setItem("user", JSON.stringify(data.user))
-      localStorage.setItem("isLoggedIn", "true")
-      document.cookie = `user=${JSON.stringify(data.user)}; path=/; max-age=86400`
-
+      // Successfully authenticated, redirect to dashboard
+      console.log("[LoginForm] Login successful, redirecting to dashboard")
       router.push("/dashboard")
       router.refresh()
     } catch (err) {
-      console.error("[LoginForm] Network error:", err)
+      console.error("[LoginForm] Error during sign-in:", err)
       const errorMessage = err instanceof Error ? err.message : "Network error"
       if (errorMessage.includes("fetch failed") || errorMessage.includes("Failed to fetch")) {
         setError("Unable to connect to the server. Please check your internet connection and try again.")
       } else {
         setError("Login failed. Please try again.")
       }
-    } finally {
       setIsLoading(false)
     }
   }

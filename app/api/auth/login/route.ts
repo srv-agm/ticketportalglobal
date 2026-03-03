@@ -1,41 +1,29 @@
-import { loginUser } from "@/lib/actions/auth"
 import { type NextRequest, NextResponse } from "next/server"
 
+/**
+ * This endpoint is a wrapper for the login form to handle redirection.
+ * The actual authentication is done through NextAuth's credentials provider.
+ * This endpoint should NOT be used directly - use NextAuth's signIn() instead.
+ * 
+ * This endpoint is deprecated and kept for backwards compatibility.
+ * The login form should call NextAuth's signIn("credentials", {...}) instead.
+ */
 export async function POST(request: NextRequest) {
   try {
-    const { email, password } = await request.json()
-
-    if (!email || !password) {
-      return NextResponse.json({ error: "Email and password are required" }, { status: 400 })
-    }
-
-    // console.log(`[Login API] Attempting login for: ${email}`)
-    const result = await loginUser(email, password)
-
-    if (!result.success) {
-      // console.error(`==========[Login API] Login failed: ${result.error}`)
-      return NextResponse.json({ error: result.error }, { status: 401 })
-    }
-
-    // console.log(`[Login API] Login successful for: ${email}`)
-    return NextResponse.json({ user: result.user }, { status: 200 })
-  } catch (error) {
-    console.error("[Login API] Route error:", error)
-    const errorMessage = error instanceof Error ? error.message : "Unknown error"
-    const errorStack = error instanceof Error ? error.stack : undefined
-    
-    // Provide more specific error messages
-    let userFriendlyError = "Internal server error"
-    if (errorMessage.includes("fetch failed") || errorMessage.includes("ECONNREFUSED") || errorMessage.includes("ENOTFOUND")) {
-      userFriendlyError = "Database connection failed. Please check your database configuration or contact support."
-    } else if (errorMessage.includes("DATABASE_URL")) {
-      userFriendlyError = "Database configuration error. Please check your environment variables."
-    }
-    
+    // This endpoint should not be used directly anymore
+    // Return 405 Method Not Allowed to encourage use of NextAuth's signIn
     return NextResponse.json(
       { 
-        error: userFriendlyError,
-        details: process.env.NODE_ENV === "development" ? errorMessage : undefined
+        error: "Direct login API is deprecated. Please use the NextAuth credentials provider.",
+        message: "This endpoint should not be called directly. Use NextAuth's signIn() function instead."
+      },
+      { status: 405 }
+    )
+  } catch (error) {
+    console.error("[Login API] Route error:", error)
+    return NextResponse.json(
+      { 
+        error: "Internal server error"
       },
       { status: 500 }
     )
