@@ -1,20 +1,55 @@
 import NextAuth, { NextAuthOptions } from "next-auth"
+import CredentialsProvider from "next-auth/providers/credentials"
 import AzureADProvider from "next-auth/providers/azure-ad"
-import { findOrCreateSSOUser, getUserByEmail } from "@/lib/actions/auth"
+import { findOrCreateSSOUser, getUserByEmail, loginUser } from "@/lib/actions/auth"
 
-// Validate environment variables
-if (!process.env.MICROSOFT_CLIENT_ID) {
-  console.error("❌ MICROSOFT_CLIENT_ID is missing from environment variables")
-}
-if (!process.env.MICROSOFT_CLIENT_SECRET) {
-  console.error("❌ MICROSOFT_CLIENT_SECRET is missing from environment variables")
-}
-if (!process.env.AUTH_SECRET) {
-  console.error("❌ AUTH_SECRET is missing from environment variables")
+// Check if Microsoft SSO is configured
+const isMicrosoftConfigured = 
+  process.env.MICROSOFT_CLIENT_ID && 
+  process.env.MICROSOFT_CLIENT_SECRET
+
+// Only warn about Microsoft config if not configured (it's optional)
+if (!isMicrosoftConfigured) {
+  console.log("ℹ️ Microsoft SSO is not configured. Only credentials login will be available.")
 }
 
-export const authOptions: NextAuthOptions = {
-  providers: [
+// Build providers array dynamically
+const providers: NextAuthOptions["providers"] = []
+
+// Always add Credentials provider for email/password login
+providers.push(
+  CredentialsProvider({
+    name: "Credentials",
+    credentials: {
+      email: { label: "Email", type: "email" },
+      password: { label: "Password", type: "password" },
+    },
+    async authorize(credentials) {
+      if (!credentials?.email || !credentials?.password) {
+        return null
+      }
+      
+      const result = await loginUser(credentials.email, credentials.password)
+      
+      if (result.success && result.user) {
+        return {
+          id: result.user.id.toString(),
+          email: result.user.email,
+          name: result.user.full_name,
+          role: result.user.role,
+          business_unit_group_id: result.user.business_unit_group_id,
+          group_name: result.user.group_name,
+        }
+      }
+      
+      return null
+    },
+  })
+)
+
+// Add Azure AD provider only if configured
+if (isMicrosoftConfigured) {
+  providers.push(
     AzureADProvider({
       clientId: process.env.MICROSOFT_CLIENT_ID!,
       clientSecret: process.env.MICROSOFT_CLIENT_SECRET!,
@@ -24,8 +59,12 @@ export const authOptions: NextAuthOptions = {
           scope: "openid profile email User.Read",
         },
       },
-    }),
-  ],
+    })
+  )
+}
+
+export const authOptions: NextAuthOptions = {
+  providers,
 
   callbacks: {
     async signIn({ user, account, profile }) {
@@ -78,10 +117,16 @@ export const authOptions: NextAuthOptions = {
     },
 
     async jwt({ token, user, account, trigger }) {
-      // ✅ FIX #1: Eagerly populate token.email from user before the hydration guard,
-      // so token.email is guaranteed to exist on the very first jwt() invocation
-      if (user?.email) {
+      // Populate token from user data (works for both credentials and SSO)
+      if (user) {
+        token.id = user.id
         token.email = user.email
+        token.name = user.name
+        // Handle custom fields from credentials provider
+        if ("role" in user) token.role = user.role
+        if ("business_unit_group_id" in user) token.business_unit_group_id = user.business_unit_group_id
+        if ("group_name" in user) token.group_name = user.group_name
+        token.auth_provider = account?.provider === "azure-ad" ? "microsoft" : "credentials"
       }
 
       // Store access token for Microsoft Graph API calls
@@ -103,7 +148,7 @@ export const authOptions: NextAuthOptions = {
             token.role                  = dbUser.role
             token.business_unit_group_id = dbUser.business_unit_group_id ?? null
             token.group_name            = dbUser.group_name ?? null
-            token.auth_provider         = dbUser.auth_provider ?? "microsoft"
+            token.auth_provider         = dbUser.auth_provider ?? "credentials"
           }
         } catch (err) {
           console.error("jwt callback DB hydration error:", err)
@@ -116,15 +161,14 @@ export const authOptions: NextAuthOptions = {
       return token
     },
 
-    // ✅ UNCHANGED: session callback is clean as-is
     async session({ session, token }) {
       session.user = {
         ...session.user,
-        id:                      token.id ?? "",
-        role:                    token.role ?? "user",
-        business_unit_group_id:  token.business_unit_group_id ?? undefined,
-        group_name:              token.group_name ?? undefined,
-        auth_provider:           token.auth_provider ?? "microsoft",
+        id:                      (token.id as string) ?? "",
+        role:                    (token.role as string) ?? "user",
+        business_unit_group_id:  token.business_unit_group_id as number | undefined,
+        group_name:              token.group_name as string | undefined,
+        auth_provider:           (token.auth_provider as string) ?? "credentials",
       }
       // Store access token in session for API calls
       session.accessToken = token.accessToken as string | undefined
@@ -142,7 +186,13 @@ export const authOptions: NextAuthOptions = {
     maxAge: 30 * 24 * 60 * 60, // 30 days
   },
 
-  secret: process.env.AUTH_SECRET,
+  // Use AUTH_SECRET, fall back to NEXTAUTH_SECRET for compatibility
+  secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET,
+  
+  // Automatically detect URL in production (Vercel sets VERCEL_URL)
+  ...(process.env.NEXTAUTH_URL ? {} : process.env.VERCEL_URL ? {
+    // On Vercel, use VERCEL_URL if NEXTAUTH_URL is not set
+  } : {}),
 }
 
 const handler = NextAuth(authOptions)
